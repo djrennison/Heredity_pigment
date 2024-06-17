@@ -1,0 +1,1067 @@
+
+
+
+---
+title: "QTL-Final"
+author: "Liz Tapanes"
+date: "7/8/2024"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# **QTL Analyses for Benthic-Limnetic Pigmentation**
+
+## **Load packages**
+
+```{r setup, include=FALSE}
+library(qtl)
+library(qtl2)
+library(openxlsx)
+library(ggplot2)
+library(tidyverse)
+library(ggcorrplot)
+library(Hmisc)
+library(RColorBrewer)
+library(car)
+library(vioplot)
+library(sm)
+library(dagitty)
+library(ggridges)
+#library(rtracklayer)
+#library(biomaRt)
+library(data.table)
+library(kinship2)
+
+
+```
+
+## kinship
+#ids not in pedigree
+#F2_P11_41	NA	NA	NA
+#F2_P14_34	F1_P14_15	F1_P14_6	NA
+#F2_P14_38	F1_P14_1	F1_P14_27	NA
+#F2_P8_2	NA	NA	NA
+
+test1 <- read.csv("finalped3.csv")
+pedall <- pedigree(id=test1$id, dadid=test1$dadid, momid=test1$momid, sex=test1$sex)
+plot(pedall)
+kinall <- kinship(pedall)
+
+##heritability 
+#match ids between files
+temp <- read.csv("finalped.csv")
+phenotype <- read.csv("Pheno.csv")
+phenotype$id <- temp$New.ID[match(phenotype$id, temp$Individual)]
+
+phenotype2 <- phenotype[,-1]
+rownames(phenotype2) <- phenotype[,1]
+head(phenotype2)
+
+covar <- read.csv("Covar.csv")
+covar$id <- temp$New.ID[match(covar$id, temp$Individual)]
+covar2 <- covar[,-1]
+rownames(covar2) <- covar[,1]
+head(covar2)
+
+#overall estimate of heritability 
+#estimate heritability of the traits with a linear mixed model. 
+#used sex and family as covariates
+hsq <- est_herit(phenotype2,kinall,covar2)
+#
+#Speckling_Density           CV_DIFF 
+#        0.2821709         0.3573363 
+        
+        
+        
+## **Pigmentation QTL**
+
+
+#400 individuals 
+
+pigment <- read.cross("csvs", dir="/Users/Desktop/QTL", genfile = "pondsAll.fixedgeno_recode.csv", na.strings = c("-", "NA"), phefile = "Pheno-071822.csv", alleles=c("A", "B"), genotypes=c("A", "H", "B"))
+
+
+pigment <- jittermap(pigment,amount=0.0001)
+pigment
+
+
+#Reassign original data file
+pigmentBin <- pigment
+
+#Set up formula for PVE (Percent Variance Explained)
+getPVE <- function(LOD, N) { 
+  100 * (1 - 10 ^ ((-2*LOD)/N))
+}
+```
+
+### **Melanophore Density (Speckling)**
+
+391 individuals
+5% Lod threshold is 3.73 
+Chr 19.3 and 8.2 (pos 33.85) surpass threshold, but ignore 19 (sex chr)
+
+```{r genome scan speckling, message=FALSE, warning=FALSE}
+#Perform interval mapping for the phenotype of interest and plot output
+Speckout <- scanone(pigmentBin, pheno.col = "Speckling_Density", method="hk")
+summary(Speckout)
+plot(Speckout, alternate.chrid = TRUE)
+
+#Calculate conditional genotype probabilities given observed marker data
+pigmentBin.gp <- sim.geno(pigmentBin, step = 1, n.draws=16, error.prob=0.01)
+
+#Calculate genotype probabilities
+Basic_GB <- calc.genoprob(pigmentBin.gp, step=1, error.prob=0.01)
+
+#Perform interval mapping on conditional genotypes with permutation to determine significance
+Speckout_perm <- scanone(pigmentBin.gp, pheno.col="Speckling_Density", method="hk", n.perm=1000)
+summary(Speckout_perm)
+plot(Speckout_perm)
+
+#Plot original graph from scaone with with 5% threshold
+summary(Speckout, threshold = 3.73)
+
+#Calculate 1.5-LOD  support interval for each chromosome with LOD over 3.74
+lodint(Speckout, chr=19.3)
+lodint(Speckout, chr=8.2, drop = 1.5)
+```
+
+
+### **Control for Covariates in Speckling Scan**
+
+387 individuals 
+5% Lod threshold is 3.80
+Chr 8 surpasses threshold 
+
+```{r covariates speckling, message=FALSE, warning=FALSE}
+#Calculate conditional genotype probabilities given observed marker data
+pigmentBin.gp <- sim.geno(pigmentBin, step = 1, n.draws=16, error.prob=0.01)
+
+#Add Sex and Family as additive covariates to one matrix called "ac"
+ac <- pull.pheno(pigmentBin.gp, c("Sex_Num","Family"))
+
+#Recalculate genotype probabilities
+Covar_GB <- calc.genoprob(pigmentBin, step=1, error.prob=0.01)
+
+#Run scanone given covariates
+pigmentBin.hk <- scanone(Covar_GB, pheno.col= "Speckling_Density",use="complete.obs", method="hk",addcovar=ac)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk, ylab="LOD score")
+
+#Plot results of only Chr 8.2, usning LOD scores 
+plot(pigmentBin.hk, ylab="LOD score", chr = 8.2, col="blue") add.threshold(pigmentBin.hk, chr = 8.2, perms = operm.hk, alpha = 0.05)
+
+#Obtain LOD threshold at 5% 
+operm.hk <- scanone(Covar_GB,pheno.col= "Speckling_Density",method="hk",addcovar=ac,n.perm=1000)
+summary(operm.hk, alpha=0.05)
+
+#Get maximum LOD score on each chromosome surpassing 5%
+summary(pigmentBin.hk, threshold=3.7) 
+add.threshold(pigmentBin.hk, perms = operm.hk, alpha = 0.05)
+
+#Map out effect plots
+mar8_33 <- find.marker(pigmentBin.gp, chr=8.2, pos=33.85)
+Bar_mar8 <- effectplot(pigmentBin.gp, mname1=mar8_33, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+sex <- pull.pheno(Covar_GB, "Sex_Num")
+geno_prob_speck_sex <- sim.geno(Covar_GB, step = 1, n.draws=16, error.prob=0.01)
+effectplot(geno_prob_speck_sex, mname2=mar8_33, mname1="Sex_Num", pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+fam <- pull.pheno(Covar_GB, "Family")
+geno_prob_speck_fam <- sim.geno(Covar_GB, step = 1, n.draws=16, error.prob=0.01)
+effectplot(geno_prob_speck_fam, mname2=mar8_33, mname1="Family", pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE on Chr 8.2 is 5.18
+```{r pve speckling, message=FALSE, warning=FALSE}
+#Chr 8.2
+out2 <- scanone(Basic_GB, pheno.col="Speckling_Density", chr=8.2, method="hk")
+LODmax2 <- max(out2)[3]
+n.ind2 <- 387
+
+PVE_2 <- getPVE(LODmax2, n.ind2)
+PVE_2
+```
+
+### **Family 1 (control for covariates)**
+
+98 individuals 
+5% LOD is 3.68
+Chr 18, pos 44.99, surpasses threshold - 3.79 LOD
+Chr 12, pos 27.47, 2nd highest peak, but not significant - 1.90 LOD
+
+```{r genome scan speckling fam1, message=FALSE, warning=FALSE}
+#Subset cross for only family 1
+pigmentfam1 <- subset(pigment, ind=300:400)
+
+pigmentfam1 <- jittermap(pigmentfam1,amount=0.0001)
+pigmentfam1
+
+#Reassign original data file to calculate genotype probabilities 
+pigmentBin_fam1 <- pigmentfam1
+
+#Perform interval mapping for the phenotype of interest and plot output
+Speckout_fam1 <- scanone(pigmentBin_fam1, pheno.col = "Speckling_Density", method="hk")
+summary(Speckout_fam1)
+plot(Speckout_fam1, alternate.chrid = TRUE)
+
+#Calculate conditional genotype probabilities given observed marker data
+pigmentBin.gp_fam1 <- sim.geno(pigmentBin_fam1, step = 1, n.draws=16, error.prob=0.01)
+
+#Calculate genotype probabilities
+Basic_GB_fam1 <- calc.genoprob(pigmentBin.gp_fam1, step=1, error.prob=0.01)
+
+#Add Sex and Family as additive covariates to one matrix called "ac"
+ac_fam1 <- pull.pheno(pigmentBin.gp_fam1, c("Sex_Num"))
+
+#Recalculate genotype probabilities for family 1
+Covar_GB_fam1 <- calc.genoprob(pigmentBin_fam1, step=1, error.prob=0.01)
+
+#Scanone for phentype in fam 1
+pigmentBin.hk_fam1 <- scanone(Covar_GB_fam1, pheno.col= "Speckling_Density",use="complete.obs", method="hk",addcovar=ac_fam1)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam1, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam1 <- scanone(Covar_GB_fam1,pheno.col= "Speckling_Density",method="hk",addcovar=ac_fam1,n.perm=1000)
+summary(operm.hk_fam1, alpha= 0.05)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam1) 
+plot(pigmentBin.hk_fam1)
+add.threshold(pigmentBin.hk_fam1, perms = operm.hk_fam1, alpha = 0.1)
+
+#Calculate LOD support interval for all chromosomes with high peaks
+lodint(Speckout_fam1, chr=18, drop = 1.5) #pos 44.99
+lodint(Speckout_fam1, chr=12, drop = 1.5) #pos 27.47
+
+#Map out effect plots 
+
+#Plot marker for chromosome 8 - pos 33.85
+mar8_mar33_fam1 <- find.marker(pigmentBin.gp_fam1, chr=8.2, pos=33.85)
+Speck_mar8_33_fam1 <- effectplot(pigmentBin.gp_fam1, mname1=mar8_mar33_fam1, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+#Plot marker for chromosome 18 - pos 44.99
+mar18_44 <- find.marker(pigmentBin.gp_fam1, chr=18, pos=44.99)
+Speck_mar48_44 <- effectplot(pigmentBin.gp_fam1, mname1=mar18_44, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+#Plot marker for chromosome 12 - pos 27.47
+mar12_27 <- find.marker(pigmentBin.gp_fam1, chr=12, pos=27.47)
+Speck_mar12_27 <- effectplot(pigmentBin.gp_fam1, mname1=mar12_27, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE on Chr 8.2 (7.41), 18 (9.60), 12 (7.68)
+```{r pve fam1 speckling, message=FALSE, warning=FALSE}
+#Chr 8.2
+out3 <- scanone(Basic_GB_fam1, pheno.col="Speckling_Density", chr=8.2, method="hk")
+LODmax3 <- max(out3)[3]
+n.ind3 <- 98
+
+PVE_3 <- getPVE(LODmax3, n.ind3)
+PVE_3
+
+#Chr 18
+out4 <- scanone(Basic_GB_fam1, pheno.col="Speckling_Density", chr=18, method="hk")
+LODmax4 <- max(out4)[3]
+n.ind4 <- 98
+
+PVE_4 <- getPVE(LODmax4, n.ind4)
+PVE_4
+```
+
+
+### **Family 2 (control for covariates)**
+
+97 individuals
+5% LOD is 3.76 
+No Chrs above threshold
+Highest peak is Chr 8.2, - 2.567
+2nd Highest peak is Chr 4, pos 31.90 - 2.383
+```{r genome scan speckling fam2, message=FALSE, warning=FALSE}
+#Subset cross for only family 2 
+pigmentfam2 <- subset(pigment, ind=1:100)
+
+pigmentfam2 <- jittermap(pigmentfam2,amount=0.0001)
+pigmentfam2
+
+#Reassign original data file to calculate genotype probabilities 
+pigmentBin_fam2 <- pigmentfam2
+
+#Perform interval mapping for the phenotype of interest and plot output
+Speckout_fam2 <- scanone(pigmentBin_fam2, pheno.col = "Speckling_Density", method="hk")
+summary(Speckout_fam2)
+plot(Speckout_fam2, alternate.chrid = TRUE)
+
+#Calculate conditional genotype probabilities given observed marker data for Speckling
+pigmentBin.gp_fam2 <- sim.geno(pigmentBin_fam2, step = 1, n.draws=16, error.prob=0.01)
+
+#Calculate genotype probabilities
+Basic_GB_fam2 <- calc.genoprob(pigmentBin.gp_fam2, step=1, error.prob=0.01)
+
+#Add Sex and Family as additive covariates to one matrix called "ac"
+ac_fam2 <- pull.pheno(pigmentBin.gp_fam2, c("Sex_Num"))
+
+#Recalculate genotype probabilities for family 2
+Covar_GB_fam2 <- calc.genoprob(pigmentBin_fam2, step=1, error.prob=0.01)
+
+pigmentBin.hk_fam2 <- scanone(Covar_GB_fam2, pheno.col= "Speckling_Density",use="complete.obs", method="hk",addcovar=ac_fam2)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam2, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam2 <- scanone(Covar_GB_fam2,pheno.col= "Speckling_Density",method="hk",addcovar=ac_fam2,n.perm=1000)
+summary(operm.hk_fam2, alpha = 0.10)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam2) 
+plot(pigmentBin.hk_fam2)
+add.threshold(pigmentBin.hk_fam2, perms = operm.hk_fam2, alpha = 0.05)
+
+#Calculate LOD support interval for all chromosomes with high peaks
+lodint(Speckout_fam2, chr=4) #pos 31.91
+
+#Map out effect plots 
+
+#Plot marker for chromosome 4 - pos 31.91
+mar4_31 <- find.marker(pigmentBin.gp_fam2, chr=4, pos=31.91)
+Speck_mar4_31 <- effectplot(pigmentBin.gp_fam2, mname1=mar4_31, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE on Chr 8.2 (10.21), 4 (10.70)
+```{r pve fam2 speckling, message=FALSE, warning=FALSE}
+#Chr 8
+out6 <- scanone(Basic_GB_fam2, pheno.col="Speckling_Density", chr=8.2, method="hk")
+LODmax6 <- max(out6)[3]
+n.ind6 <- 97
+
+PVE_6 <- getPVE(LODmax6, n.ind6)
+PVE_6
+
+#Chr 4
+out7 <- scanone(Basic_GB_fam2, pheno.col="Speckling_Density", chr=4, method="hk")
+LODmax7 <- max(out7)[3]
+n.ind7 <- 97
+
+PVE_7 <- getPVE(LODmax7, n.ind7)
+PVE_7
+```
+
+
+### **Family 3 (control for covariates)**
+
+99 individuals
+5% LOD is 3.82
+No Chrs above this thrshold 
+Highest peaks are on chr 19.3 (pos 5.79), chr 6.2 (pos 29.55), chr 9 (pos 39.51), chr 11.2 (pos 0.00) 
+```{r genome scan speckling fam3, message=FALSE, warning=FALSE}
+#Subset cross for only family 3
+pigmentfam3 <- subset(pigment, ind=101:199)
+
+pigmentfam3 <- jittermap(pigmentfam3,amount=0.0001)
+pigmentfam3
+
+#Reassign original data file to calculate genotype probabilities 
+pigmentBin_fam3 <- pigmentfam3
+
+#Perform interval mapping for the phenotype of interest and plot output
+Speckout_fam3 <- scanone(pigmentBin_fam3, pheno.col = "Speckling_Density", method="hk")
+summary(Speckout_fam3)
+plot(Speckout_fam3, alternate.chrid = TRUE)
+
+#Calculate conditional genotype probabilities given observed marker data for Speckling
+pigmentBin.gp_fam3 <- sim.geno(pigmentBin_fam3, step = 1, n.draws=16, error.prob=0.01)
+
+#Calculate genotype probabilities
+Basic_GB_fam3 <- calc.genoprob(pigmentBin.gp_fam3, step=1, error.prob=0.01)
+
+#Add Sex and Family as additive covariates to one matrix called "ac"
+ac_fam3 <- pull.pheno(pigmentBin.gp_fam3, c("Sex_Num"))
+
+#Recalculate genome probabilities for family 3
+Covar_GB_fam3 <- calc.genoprob(pigmentBin_fam3, step=1, error.prob=0.01)
+
+pigmentBin.hk_fam3 <- scanone(Covar_GB_fam3, pheno.col= "Speckling_Density",use="complete.obs", method="hk",addcovar=ac_fam3)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam3, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam3 <- scanone(Covar_GB_fam3,pheno.col= "Speckling_Density",method="hk",addcovar=ac_fam3,n.perm=1000)
+summary(operm.hk_fam3, alpha = 0.10)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam3) 
+plot(pigmentBin.hk_fam3)
+add.threshold(pigmentBin.hk_fam3, perms = operm.hk_fam3, alpha = 0.05)
+
+#Calculate LOD support interval for each chromosome with high peaks
+lodint(Speckout_fam3, chr=19.3) #pos 5.79 (15392877)
+lodint(Speckout_fam3, chr=6.2) #pos 29.55 (13133764)
+lodint(Speckout_fam3, chr=9) #pos 39.51 (10998897)
+lodint(Speckout_fam3, chr=11.2) #pos 0.00 (16325806)
+
+#Map out effect plots 
+
+#Plot marker for chromosome 19.3 - pos 5.9
+mar19_5 <- find.marker(pigmentBin.gp_fam3, chr=19.3, pos=5.79)
+Speck_mar19_5 <- effectplot(pigmentBin.gp_fam3, mname1=mar19_5, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+#Plot marker for chromosome 6.2 - pos 29.55
+mar6_29 <- find.marker(pigmentBin.gp_fam3, chr=6.2, pos=29.55)
+Speck_6_29 <- effectplot(pigmentBin.gp_fam3, mname1=mar6_29, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+#Plot marker for chromosome 11.2 - pos 0.00
+mar11_0 <- find.marker(pigmentBin.gp_fam3, chr=11.2, pos=0.00)
+Speck_mar11_0 <- effectplot(pigmentBin.gp_fam3, mname1=mar11_0, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+
+#Plot marker for chromosome 9 - pos 39.51
+mar9_39 <- find.marker(pigmentBin.gp_fam3, chr=9, pos=39.51)
+Speck_mar9_39 <- effectplot(pigmentBin.gp_fam3, mname1=mar9_39, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE for chr 19.3 (18.38), chr 6.2 (11.63), chr 9 (6.63, chr 11.2 (12.30)
+```{r pve fam3 speckling, message=FALSE, warning=FALSE}
+Basic_GB_fam3 <- calc.genoprob(pigmentBin.gp_fam3, step=1, error.prob=0.01)
+
+#Chr 8
+out8 <- scanone(Basic_GB_fam3, pheno.col="Speckling_Density", chr=8.2, method="hk")
+LODmax8 <- max(out8)[3]
+n.ind8 <- 99
+
+PVE_8 <- getPVE(LODmax8, n.ind8)
+PVE_8
+
+#Chr 19
+out9 <- scanone(Basic_GB_fam3, pheno.col="Speckling_Density", chr=19, method="hk")
+LODmax9 <- max(out9)[3]
+n.ind9 <- 99
+
+PVE_9 <- getPVE(LODmax9, n.ind9)
+PVE_9
+
+#Chr 6.2
+out10 <- scanone(Basic_GB_fam3, pheno.col="Speckling_Density", chr=6.2, method="hk")
+LODmax10 <- max(out10)[3]
+n.ind10 <- 99
+
+PVE_10 <- getPVE(LODmax10, n.ind10)
+PVE_10
+
+#Chr 9
+out11 <- scanone(Basic_GB_fam3, pheno.col="Speckling_Density", chr=9, method="hk")
+LODmax11 <- max(out11)[3]
+n.ind11 <- 99
+
+PVE_11 <- getPVE(LODmax11, n.ind11)
+PVE_11
+
+#Chr 11.2
+out12 <- scanone(Basic_GB_fam3, pheno.col="Speckling_Density", chr=11.2, method="hk")
+LODmax12 <- max(out12)[3]
+n.ind12 <- 99
+
+PVE_12 <- getPVE(LODmax12, n.ind12)
+PVE_12
+```
+
+### **Family 4 (control for covariates)**
+
+93 individuals 
+5% LOD is 3.53
+No Chrs above this thrshold 
+Highest peaks on chr 3 and chr 8.2 
+
+```{r genome scan speckling fam4, message=FALSE, warning=FALSE}
+#Subset cross for only family 4
+pigmentfam4 <- subset(pigment, ind=200:299)
+
+pigmentfam4 <- jittermap(pigmentfam4,amount=0.0001)
+pigmentfam4
+
+#Convert Speckling density to numeric
+#pigmentfam4$pheno$Speckling_Density <- as.numeric(pigmentfam4$pheno$Speckling_Density)
+
+#Reassign original data file to calculate genotype probabilities 
+pigmentBin_fam4 <- pigmentfam4
+
+#Perform interval mapping for the phenotype of interest and plot output
+Speckout_fam4 <- scanone(pigmentBin_fam4, pheno.col = "Speckling_Density", method="hk")
+summary(Speckout_fam4)
+plot(Speckout_fam4, alternate.chrid = TRUE)
+
+#Calculate conditional genotype probabilities given observed marker data for Speckling
+pigmentBin.gp_fam4 <- sim.geno(pigmentBin_fam4, step = 1, n.draws=16, error.prob=0.01)
+
+#Calculate genotype probabilities
+Basic_GB_fam4 <- calc.genoprob(pigmentBin.gp_fam4, step=1, error.prob=0.01)
+
+#Add Sex and Family as additive covariates to one matrix called "ac"
+ac_fam4 <- pull.pheno(pigmentBin.gp_fam4, c("Sex_Num"))
+
+#Recalculate genome probabilities for family 4
+Covar_GB_fam4 <- calc.genoprob(pigmentBin_fam4, step=1, error.prob=0.01)
+
+pigmentBin.hk_fam4 <- scanone(Covar_GB_fam4, pheno.col= "Speckling_Density",use="complete.obs", method="hk",addcovar=ac_fam4)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam4, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam4 <- scanone(Covar_GB_fam4,pheno.col= "Speckling_Density",method="hk",addcovar=ac_fam4,n.perm=1000)
+summary(operm.hk_fam4, alpha = 0.10)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam4) 
+plot(pigmentBin.hk_fam4)
+add.threshold(pigmentBin.hk_fam4, perms = operm.hk_fam4, alpha = 0.10)
+
+#Calculate LOD support interval for each chromosome with high peaks
+lodint(Speckout_fam4, chr=3) #pos 5.70 
+
+#Map out effect plots 
+
+#Plot marker for chromosome 3 - pos 5.70
+mar3_5 <- find.marker(pigmentBin.gp_fam4, chr=3, pos=5.70)
+Speck_mar3_5 <- effectplot(pigmentBin.gp_fam4, mname1=mar3_5, pheno.col = "Speckling_Density", ylab="Melanophore Density", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE on chr 3 (9.04) and chr 8.2 (8.53)
+```{r pve fam4 speckling, message=FALSE, warning=FALSE}
+#Chr 8.2
+out13 <- scanone(Basic_GB_fam4, pheno.col="Speckling_Density", chr=8.2, method="hk")
+LODmax13 <- max(out13)[3]
+n.ind13 <- 93
+
+PVE_13 <- getPVE(LODmax13, n.ind13)
+PVE_13
+
+#Chr 3
+out14 <- scanone(Basic_GB_fam4, pheno.col="Speckling_Density", chr=3, method="hk")
+LODmax14 <- max(out14)[3]
+n.ind14 <- 93
+
+PVE_14 <- getPVE(LODmax14, n.ind14)
+PVE_14
+```
+
+### **Barring**
+
+398 individuals
+5% Lod threshold is 3.76
+Chr 21 (pos 29.68) surpasses threshold
+```{r genome scan barring, message=FALSE, warning=FALSE}
+#Convert Speckling density to numeric
+pigment$pheno$CV_DIFF <- as.numeric(pigment$pheno$CV_DIFF)
+
+#Perform interval mapping for the phenotype of interest and plot output
+Barout <- scanone(pigmentBin, pheno.col = "CV_DIFF", method="hk")
+summary(Barout)
+plot(Barout, alternate.chrid = TRUE)
+
+#Perform interval mapping on conditional genotypes with permutation to determine significance
+Barout_perm <- scanone(pigmentBin.gp, pheno.col="CV_DIFF", method="hk", n.perm=1000)
+summary(Barout_perm)
+plot(Barout_perm)
+
+#Plot original graph from scaone with 5% threshold 
+summary(Barout, threshold = 3.76)
+
+#Calculate 1.5-LOD support interval for each chromosome with LOD over 3.70
+lodint(Barout, chr=21, drop = 1.5)
+```
+
+### **Control for Covariates in Barring Scan**
+
+394 individuals 
+5% Lod threshold is 3.71
+Chr 21 surpasses threshold 
+```{r covariates barring, message=FALSE, warning=FALSE}
+#Run scanone given covariates
+pigmentBin.hk2 <- scanone(Covar_GB, pheno.col= "CV_DIFF",use="complete.obs", method="hk",addcovar=ac)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk2, ylab="LOD score")
+
+#Plot results of only Chr 21, usning LOD scores 
+plot(pigmentBin.hk2, ylab="LOD score", chr = 21, col="blue")
+
+#Obtain LOD threshold at 5% 
+operm.hk2 <- scanone(Covar_GB,pheno.col= "CV_DIFF",method="hk",addcovar=ac,n.perm=1000)
+summary(operm.hk2, alpha=0.05)
+
+#Get maximum LOD score on each chromosome surpassing 5%
+summary(pigmentBin.hk2, threshold=3.71)
+add.threshold(pigmentBin.hk2, perms = operm.hk, alpha = 0.05)
+
+#Map out effect plots
+
+#Plot marker for chromosome 21 pos 29
+mar21 <- find.marker(pigmentBin.gp, chr=21, pos=29.7)
+Bar_mar21 <- effectplot(pigmentBin.gp, mname1=mar21, pheno.col = "CV_DIFF", ylab="Dorsal Barring", xlab="Genotype", col = c("blue", "red", "#C5692D"))
+
+geno_prob_speck_sex2 <- sim.geno(Covar_GB, step = 1, n.draws=16, error.prob=0.01)
+effectplot(geno_prob_speck_sex2, mname2=mar21, mname1="Sex_Num", pheno.col = "CV_DIFF", var.flag="group")
+
+geno_prob_speck_fam2 <- sim.geno(Covar_GB, step = 1, n.draws=16, error.prob=0.01)
+effectplot(geno_prob_speck_fam2, mname2=mar21, mname1="Family", pheno.col = "CV_DIFF")
+```
+
+#### **PVE per Chromosome**
+
+PVE for Chr 21 (4.26)
+```{r pve barring, message=FALSE, warning=FALSE}
+#Chr 21
+out15 <- scanone(Basic_GB, pheno.col="CV_DIFF", chr= 21, method="hk")
+LODmax15 <- max(out15)[3]
+n.ind15 <- 394
+
+PVE_15 <- getPVE(LODmax15, n.ind15)
+PVE_15
+```
+
+### **Family 1 (control for covariates)**
+
+98 individuals
+5% LOD is 3.68
+No Chr above this threshold
+High peaks on chr 13.3 and 2
+
+```{r genome scan barring fam1, message=FALSE, warning=FALSE}
+#Perform interval mapping for the phenotype of interest and plot output
+Barout_fam1 <- scanone(pigmentBin_fam1, pheno.col = "CV_DIFF", method="hk")
+summary(Barout_fam1)
+plot(Barout_fam1, alternate.chrid = TRUE)
+
+#Scanone for phentype in fam 1
+pigmentBin.hk_fam1_bar <- scanone(Covar_GB_fam1, pheno.col= "CV_DIFF", method="hk",use="complete.obs", addcovar=ac_fam1)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam1_bar, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam1_bar <- scanone(Covar_GB_fam1,pheno.col= "CV_DIFF",method="hk",addcovar=ac_fam1,n.perm=1000)
+summary(operm.hk_fam1_bar)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam1_bar) 
+plot(pigmentBin.hk_fam1_bar)
+add.threshold(pigmentBin.hk_fam1_bar, perms = operm.hk_fam1_bar, alpha = 0.05)
+
+#Calculate LOD support interval for each chromosome with high peaks
+lodint(Barout_fam1, chr=13.3) #pos 44.76 (2006395)
+lodint(Barout_fam1, chr=2) #pos 50.27 (18316771)
+
+#Map out effect plots 
+
+#Plot marker for chromosome 21 pos 29.7
+mar21_fam1 <- find.marker(pigmentBin.gp_fam1, chr=21, pos=29.7)
+Bar_mar21_fam1 <- effectplot(pigmentBin.gp, mname1=mar21, pheno.col = "CV_DIFF", ylab="Dorsal Barring", xlab="Genotype")
+
+#Plot marker for chromosome 13.3 - pos 44.76
+mar13_44 <- find.marker(pigmentBin.gp_fam1, chr=13.3, pos=44.76)
+Bar_mar13_44 <- effectplot(pigmentBin.gp_fam1, mname1=mar13_44, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+
+#Plot marker for chromosome 2 - pos 50.27
+mar2_50 <- find.marker(pigmentBin.gp_fam1, chr=2, pos=50.27)
+Bar_mar33_50 <- effectplot(pigmentBin.gp_fam1, mname1=mar2_50, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE on chr 21 (4.61), chr 13 (6.89), and chr 2 (6.16)
+```{r pve fam1 barring, message=FALSE, warning=FALSE}
+#Chr 21
+out16 <- scanone(Basic_GB_fam1, pheno.col="CV_DIFF", chr= 21, method="hk")
+LODmax16 <- max(out16)[3]
+n.ind16 <- 98
+
+PVE_16 <- getPVE(LODmax16, n.ind16)
+PVE_16
+
+#Chr 13
+out17 <- scanone(Basic_GB_fam1, pheno.col="CV_DIFF", chr= 13, method="hk")
+LODmax17 <- max(out17)[3]
+n.ind17 <- 98
+
+PVE_17 <- getPVE(LODmax17, n.ind17)
+PVE_17
+
+
+#Chr 2
+out18 <- scanone(Basic_GB_fam1, pheno.col="CV_DIFF", chr= 2, method="hk")
+LODmax18 <- max(out18)[3]
+n.ind18 <- 98
+
+PVE_18 <- getPVE(LODmax18, n.ind18)
+PVE_18
+```
+
+### **Family 2 (control for covariates)**
+
+99 individuals
+5% LOD is 3.58
+Chr 16 above this threshold
+Chr 1.2 second highest peak
+```{r genome scan barring fam2, message=FALSE, warning=FALSE}
+#Perform interval mapping for the phenotype of interest and plot output
+Barout_fam2 <- scanone(pigmentBin_fam2, pheno.col = "CV_DIFF", method="hk")
+summary(Barout_fam2)
+plot(Barout_fam2, alternate.chrid = TRUE)
+
+#Scanone for phentype in fam 2
+pigmentBin.hk_fam2_bar <- scanone(Covar_GB_fam2, pheno.col= "CV_DIFF",use="complete.obs", method="hk",addcovar=ac_fam2)
+summary(pigmentBin.hk_fam2_bar)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam2_bar, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam2_bar <- scanone(Covar_GB_fam2,pheno.col= "CV_DIFF",method="hk",addcovar=ac_fam2,n.perm=1000)
+summary(operm.hk_fam2_bar)
+plot(operm.hk_fam2_bar)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam2_bar) 
+plot(pigmentBin.hk_fam2_bar)
+add.threshold(pigmentBin.hk_fam2_bar, perms = operm.hk_fam2_bar, alpha = 0.05)
+
+#Calculate LOD support interval for each chromosome with high peaks
+lodint(Barout_fam2, chr=16) #pos 63.12 (563523) 
+lodint(Barout_fam2, chr=1.2) #pos 15.09 (21046452)
+
+#Map out effect plots 
+
+#Plot marker for chromosome 16 - pos 63.12
+mar16_63 <- find.marker(pigmentBin.gp_fam2, chr=16, pos=63.12)
+Bar_mar16_63 <- effectplot(pigmentBin.gp_fam2, mname1=mar16_63, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+
+#Plot marker for chromosome 1.2 - pos 15.09
+mar1_15 <- find.marker(pigmentBin.gp_fam2, chr=1.2, pos=15.09)
+Bar_mar1_15 <- effectplot(pigmentBin.gp_fam2, mname1=mar1_15, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE for Chr 21 (11.03), chr 16 (19.45), chr 1.2 (11.85)
+```{r pve fam2 barring, message=FALSE, warning=FALSE}
+#Chr 21
+out19 <- scanone(Basic_GB_fam2, pheno.col="CV_DIFF", chr= 21, method="hk")
+LODmax19 <- max(out19)[3]
+n.ind19 <- 99
+
+PVE_19 <- getPVE(LODmax19, n.ind19)
+PVE_19
+
+#Chr 16
+out20 <- scanone(Basic_GB_fam2, pheno.col="CV_DIFF", chr= 16, method="hk")
+LODmax20 <- max(out20)[3]
+n.ind20 <- 99
+
+PVE_20 <- getPVE(LODmax20, n.ind20)
+PVE_20
+```
+
+### **Family 3 (control for covariates)**
+
+99 individuals
+5% LOD is 3.67, 10% LOD is 3.33
+LODs above this threshold = 
+
+```{r genome scan barring fam3, message=FALSE, warning=FALSE}
+#Perform interval mapping for the phenotype of interest and plot output
+Barout_fam3 <- scanone(pigmentBin_fam3, pheno.col = "CV_DIFF", method="hk")
+summary(Barout_fam3)
+plot(Barout_fam3, alternate.chrid = TRUE)
+
+#Scanone for phentype in fam 3
+pigmentBin.hk_fam3_bar <- scanone(Covar_GB_fam3, pheno.col= "CV_DIFF",use="complete.obs", method="hk",addcovar=ac_fam3)
+summary(pigmentBin.hk_fam3_bar)
+
+#Plot results of all chromosomes, usning LOD scores
+plot(pigmentBin.hk_fam3_bar, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam3_bar <- scanone(Covar_GB_fam3,pheno.col= "CV_DIFF",method="hk",addcovar=ac_fam3, n.perm=1000)
+summary(operm.hk_fam3_bar)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam3_bar) 
+plot(pigmentBin.hk_fam3_bar)
+add.threshold(pigmentBin.hk_fam3_bar, perms = operm.hk_fam3_bar, alpha = 0.05)
+
+#Calculate LOD support interval for each chromosome with high peaks
+lodint(Barout_fam3, chr=9) #pos 26.96 (5912756) 
+
+#Map out effect plots 
+
+#Plot marker for chromosome 9 - pos 26.96
+mar9_26 <- find.marker(pigmentBin.gp_fam3, chr=9, pos=26.96)
+Bar_mar9_26 <- effectplot(pigmentBin.gp_fam3, mname1=mar9_26, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE on Chr 21 (11.24), 9 (12.66)
+```{r pve fam3 barring, message=FALSE, warning=FALSE}
+#Chr 21
+out22 <- scanone(Basic_GB_fam3, pheno.col="CV_DIFF", chr= 21, method="hk")
+LODmax22 <- max(out22)[3]
+n.ind22 <- 99
+
+PVE_22 <- getPVE(LODmax22, n.ind22)
+PVE_22
+
+#Chr 9
+out23 <- scanone(Basic_GB_fam3, pheno.col="CV_DIFF", chr= 9, method="hk")
+LODmax23 <- max(out23)[3]
+n.ind23 <- 99
+
+PVE_23 <- getPVE(LODmax23, n.ind23)
+PVE_23
+```
+
+### **Family 4 (control for covariates)**
+
+97 individuals
+5% LOD is 3.44
+No Chr above this threshold
+Highest peak on Chr 7
+```{r genome scan barring fam4, message=FALSE, warning=FALSE}
+#Perform interval mapping for the phenotype of interest and plot output
+Barout_fam4 <- scanone(pigmentBin_fam4, pheno.col = "CV_DIFF", method="hk")
+summary(Barout_fam4)
+plot(Barout_fam4, alternate.chrid = TRUE)
+
+#Scanone for phentype in fam 4
+pigmentBin.hk_fam4_bar <- scanone(Covar_GB_fam4, pheno.col= "CV_DIFF",use="complete.obs", method="hk",addcovar=ac_fam4)
+summary(pigmentBin.hk_fam4_bar)
+
+#Plot results of all chromosomes, usning LOD scores 
+plot(pigmentBin.hk_fam4_bar, ylab="LOD score")
+
+#Obtain 5% LOD threshold
+operm.hk_fam4_bar <- scanone(Covar_GB_fam4,pheno.col= "CV_DIFF",method="hk",addcovar=ac_fam4,n.perm=1000)
+summary(operm.hk_fam4_bar)
+
+#Get maximum LOD score on each chromosome 
+summary(pigmentBin.hk_fam4_bar) 
+plot(pigmentBin.hk_fam4_bar)
+add.threshold(pigmentBin.hk_fam4_bar, perms = operm.hk_fam4_bar, alpha = 0.05)
+
+#Calculate LOD support interval for each chromosome with high peaks
+lodint(Barout_fam4, chr=7) #equal lods at pos 80.84 (899011),88.15 (262089), 90.46 (183409)
+
+#Map out effect plots
+
+#Plot marker for chromosome 7 - pos 80.84
+mar7_80 <- find.marker(pigmentBin.gp_fam4, chr=7, pos=80.84)
+Bar_mar7_80 <- effectplot(pigmentBin.gp_fam4, mname1=mar7_80, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+
+#Plot marker for chromosome 7 - pos 88.15
+mar7_88 <- find.marker(pigmentBin.gp_fam4, chr=7, pos=88.15)
+Bar_mar7_88 <- effectplot(pigmentBin.gp_fam4, mname1=mar7_88, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+
+#Plot marker for chromosome 7 - pos 90.46
+mar7_90 <- find.marker(pigmentBin.gp_fam4, chr=7, pos=90.46)
+Bar_mar7_90 <- effectplot(pigmentBin.gp_fam4, mname1=mar7_90, pheno.col = "CV_DIFF", ylab="Lateral Barring", xlab="Genotype")
+```
+
+#### **PVE per Chromosome**
+
+PVE for Chr 21 (5.21), chr 7 (8.50)
+```{r pve fam4 barring, message=FALSE, warning=FALSE}
+#Chr 21
+out24 <- scanone(Basic_GB_fam4, pheno.col="CV_DIFF", chr= 21, method="hk")
+LODmax24 <- max(out24)[3]
+n.ind24 <- 97
+
+PVE_24 <- getPVE(LODmax24, n.ind24)
+PVE_24
+
+#Chr 7
+out25 <- scanone(Basic_GB_fam4, pheno.col="CV_DIFF", chr= 7, method="hk")
+LODmax25 <- max(out25)[3]
+n.ind25 <- 97
+
+PVE_25 <- getPVE(LODmax25, n.ind25)
+PVE_25
+```
+
+## **Gene Finder** 
+
+```{r gene search, message=FALSE, warning=FALSE}
+#Set the biomart
+gacu.ensembl <- useMart("ensembl",dataset="gaculeatus_gene_ensembl")
+
+#Set the chromosomes of interest
+chrom8=c("groupVIII")
+chrom21=c("groupXXI")
+chrom18=c("groupXVIII")
+chrom12=c("groupXII")
+chrom4=c("groupIV")
+chrom19=c("groupXIX")
+chrom6=c("groupVI")
+chrom9=c("groupIX")
+chrom11=c("groupXI")
+chrom3=c("groupIII")
+chrom13=c("groupXIII")
+chrom16=c("groupXVI")
+chrom1=c("groupI")
+chrom2=c("groupII")
+chrom7=c("groupVII")
+
+#Gene attributes from the "feature" page
+attributes.feat<-c("start_position","end_position","chromosome_name", "hgnc_symbol", "ensembl_gene_id")
+filters.feat <-c("chromosome_name")
+
+#Subset attributes and features for each chr of interest 
+BM_chr8 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom8), mart=gacu.ensembl)
+write.csv(BM_chr8, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr8_new.csv")
+
+BM_chr21 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom21), mart=gacu.ensembl)
+write.csv(BM_chr21, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr21.csv")
+
+BM_chr18 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom18), mart=gacu.ensembl)
+write.csv(BM_chr18, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr18.csv")
+
+BM_chr12 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom12), mart=gacu.ensembl)
+write.csv(BM_chr12, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr12.csv")
+
+BM_chr04 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom4), mart=gacu.ensembl)
+write.csv(BM_chr04, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr04.csv")
+
+BM_chr19 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom19), mart=gacu.ensembl)
+write.csv(BM_chr19, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr19.csv")
+
+BM_chr06 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom6), mart=gacu.ensembl)
+write.csv(BM_chr06, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr06.csv")
+
+BM_chr09 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom9), mart=gacu.ensembl)
+write.csv(BM_chr09, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr09.csv")
+
+BM_chr11 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom11), mart=gacu.ensembl)
+write.csv(BM_chr11, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr11.csv")
+
+BM_chr03 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom3), mart=gacu.ensembl)
+write.csv(BM_chr03, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr03.csv")
+
+BM_chr13 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom13), mart=gacu.ensembl)
+write.csv(BM_chr13, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr13.csv")
+
+BM_chr16 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom16), mart=gacu.ensembl)
+write.csv(BM_chr16, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr16.csv")
+
+BM_chr01 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom1), mart=gacu.ensembl)
+write.csv(BM_chr01, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr01.csv")
+
+BM_chr07 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom7), mart=gacu.ensembl)
+write.csv(BM_chr07, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr07.csv")
+
+BM_chr02 <- getBM(attributes= attributes.feat,filters=filters.feat,values=list(chrom2), mart=gacu.ensembl)
+write.csv(BM_chr02, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/BM_chr02.csv")
+
+#For each list, subset only those regions that fall within 50kb (per LD window in stickles)
+```
+
+
+## **Check intervals in Piechel study **
+
+```{r piechel and marquez check, message=FALSE, warning=FALSE}
+library(dplyr)
+
+#Load Piechel tables
+intervals <- read.csv("/Users/liz/Projects/Github/QTL_pigmentation_stickleback/PeichelMarquesESMTableS1.csv", header = TRUE, sep = ",")
+
+#For each locus, check if it falls within any of their intervals 
+Chr08_loc1 = 11219937
+Chr08_loc1_match <- intervals %>% mutate(ok = Chr8_loc1 >= X.11 & Chr8_loc1 <= X.15)
+write.csv(Chr08_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr8_loc1_match.csv")
+
+Chr18_loc1 = 8361341
+Chr18_loc1_match <- intervals %>% mutate(ok = Chr18_loc1 >= X.11 & Chr18_loc1 <= X.15)
+write.csv(Chr18_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr18_loc1_match.csv")
+
+Chr12_loc1 = 5599430
+Chr12_loc1_match <- intervals %>% mutate(ok = Chr12_loc1 >= X.11 & Chr12_loc1 <= X.15)
+write.csv(Chr12_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr12_loc1_match.csv")
+
+Chr04_loc1 = 4930685
+Chr04_loc1_match <- intervals %>% mutate(ok = Chr04_loc1 >= X.11 & Chr04_loc1 <= X.15)
+write.csv(Chr04_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr04_loc1_match.csv")
+
+Chr19_loc1 = 15392877
+Chr19_loc1_match <- intervals %>% mutate(ok = Chr19_loc1 >= X.11 & Chr19_loc1 <= X.15)
+write.csv(Chr19_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr19_loc1_match.csv")
+
+Chr06_loc1 = 13133764
+Chr06_loc1_match <- intervals %>% mutate(ok = Chr06_loc1 >= X.11 & Chr06_loc1 <= X.15)
+write.csv(Chr06_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr06_loc1_match.csv")
+
+Chr09_loc1 = 10998897
+Chr09_loc1_match <- intervals %>% mutate(ok = Chr09_loc1 >= X.11 & Chr09_loc1 <= X.15)
+write.csv(Chr09_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr09_loc1_match.csv")
+
+Chr11_loc1 = 16325806
+Chr11_loc1_match <- intervals %>% mutate(ok = Chr11_loc1 >= X.11 & Chr11_loc1 <= X.15)
+write.csv(Chr11_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr11_loc1_match.csv")
+
+
+Chr03_loc1 = 16551956
+Chr03_loc1_match <- intervals %>% mutate(ok = Chr03_loc1 >= X.11 & Chr03_loc1 <= X.15)
+write.csv(Chr03_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr03_loc1_match.csv")
+
+Chr21_loc1 = 7342929
+Chr21_loc1_match <- intervals %>% mutate(ok = Chr21_loc1 >= X.11 & Chr21_loc1 <= X.15)
+write.csv(Chr21_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr21_loc1_match.csv")
+
+
+Chr13_loc1 = 2006395
+Chr13_loc1_match <- intervals %>% mutate(ok = Chr13_loc1 >= X.11 & Chr13_loc1 <= X.15)
+write.csv(Chr13_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr13_loc1_match.csv")
+
+
+Chr02_loc1 = 18316771
+Chr02_loc1_match <- intervals %>% mutate(ok = Chr02_loc1 >= X.11 & Chr02_loc1 <= X.15)
+write.csv(Chr02_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr02_loc1_match.csv")
+
+Chr16_loc1 = 563523
+Chr16_loc1_match <- intervals %>% mutate(ok = Chr16_loc1 >= X.11 & Chr16_loc1 <= X.15)
+write.csv(Chr16_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr16_loc1_match.csv")
+
+
+Chr01_loc1 = 21046452
+Chr01_loc1_match <- intervals %>% mutate(ok = Chr01_loc1 >= X.11 & Chr01_loc1 <= X.15)
+write.csv(Chr01_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr01_loc1_match.csv")
+
+Chr09_loc1 = 5912756
+Chr09_loc1_match <- intervals %>% mutate(ok = Chr09_loc1 >= X.11 & Chr09_loc1 <= X.15)
+write.csv(Chr09_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr09_loc1_match.csv")
+
+Chr07_loc1 = 899011
+Chr07_loc1_match <- intervals %>% mutate(ok = Chr07_loc1 >= X.11 & Chr07_loc1 <= X.15)
+write.csv(Chr07_loc1_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr07_loc1_match.csv")
+
+Chr07_loc2 = 262089
+Chr07_loc2_match <- intervals %>% mutate(ok = Chr07_loc2 >= X.11 & Chr07_loc2 <= X.15)
+write.csv(Chr07_loc2_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr07_loc2_match.csv")
+
+Chr07_loc3 = 183409
+Chr07_loc3_match <- intervals %>% mutate(ok = Chr07_loc3 >= X.11 & Chr07_loc3 <= X.15)
+write.csv(Chr07_loc3_match, "/Users/liz/Projects/Github/QTL_pigmentation_stickleback/Chr07_loc3_match.csv")
+
+#Manually search through the outputs, filtering per chromosome for matches  
+```
+
